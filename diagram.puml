@@ -1,0 +1,56 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName Monospace
+title Minimal Web Tier
+
+rectangle "VPC ${var.vpc_cidr}" {
+
+  frame "AZ A" {
+    rectangle "Mgmt (public)\nALB attachment + Bastion" as MgmtA
+    rectangle "App (private)\nASG targets" as AppA
+    rectangle "Backend (private)\n(reserved)" as BkA
+  }
+
+  frame "AZ B" {
+    rectangle "Mgmt (public)\nALB attachment" as MgmtB
+    rectangle "App (private)\nASG targets" as AppB
+    rectangle "Backend (private)\n(reserved)" as BkB
+  }
+
+  cloud "IGW" as IGW
+  cloud "NAT A" as NATA
+  cloud "NAT B" as NATB
+
+  [ALB (internet-facing)\nattached to Mgmt A & B] as ALB
+  [Bastion (t2.micro)\nMgmt-A] as Bastion
+  [ASG (t2.micro min=2 max=6)\nApp A & B\nApache + healthcheck '/'] as ASG
+
+  ' --- Routing depiction (conceptual) ---
+  IGW -down- MgmtA
+  IGW -down- MgmtB
+  NATA -down- AppA
+  NATB -down- AppB
+
+  ' --- ALB multi-AZ attachment (visual) ---
+  ALB .. MgmtA
+  ALB .. MgmtB
+
+  ' --- Traffic flows ---
+  ALB -down-> ASG : http:80
+  Bastion -down-> ASG : ssh:22
+
+  note bottom
+    Routing via route tables:
+      • Public subnets → 0.0.0.0/0 via IGW
+      • Private subnets → 0.0.0.0/0 via NAT A/B
+    Security groups:
+      • ALB ingress :80 from Internet
+      • App ingress :80 from ALB SG; :22 from Bastion SG
+      • Bastion ingress :22 from your /32
+  end note
+}
+
+' Optional: show Internet origin
+cloud "Internet" as Internet
+Internet -down-> ALB : http:80
+@enduml
