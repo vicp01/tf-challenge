@@ -34,5 +34,5 @@ variable "instance_type_bastion" {
 variable "enable_alb_logs" {
   description = "Whether to create S3 bucket and enable ALB access logs"
   type        = bool
-  default     = false
+  default     = true
 }

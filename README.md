@@ -1,50 +1,174 @@
 # Coalfire AWS Challenge
 
-This solution **uses some of Coalfire’s public Terraform modules** where they exist and falls back to well‑maintained community modules for missing pieces (ALB, ASG). It satisfies the SRE AWS challenge requirements with a **minimal, deployable** stack:
+This repo stands up a minimal, **deployable** web tier that matches the provided requirements. I kept it small and readable, but HA where it matters.
 
-- **VPC & Subnets (Coalfire)**: `Coalfire-CF/terraform-aws-vpc-nfw`  
-  *3 tiers × 2 AZs → 6 subnets:* Management (public), Application (private), Backend (private).
-- **Bastion (Coalfire)**: `Coalfire-CF/terraform-aws-ec2`
-- **ALB (Community)**: `terraform-aws-modules/alb/aws`
-- **Auto Scaling Group (Community)**: `terraform-aws-modules/autoscaling/aws`
-- **S3 for ALB access logs (Coalfire)**: `Coalfire-CF/terraform-aws-s3`
+---
 
-> Reasoning behind this: couldnt locate the ALB/ASG modules publicly. Using the VPC/EC2/S3 keeps alignment with CoalFire modules.
+## What it builds
 
-## Quick start
+- **VPC (10.1.0.0/16)** with **six /24 subnets**  
+  *Mgmt (public), App (private), Backend (private) across two AZs*  
+  Public subnets route to IGW, private subnets to NAT (one per AZ).
+
+- **ALB (internet-facing)** in the two Mgmt/public subnets → forwards **HTTP:80** to…
+
+- **ASG (Amazon Linux 2023)** in the App/private subnets  
+  `min=2 / desired=2 / max=6`, `t2.micro`. User data installs Apache and renders a tiny status page.
+
+- **Bastion (t2.micro)** in Mgmt/public. SSH limited to a single `/32`.  
+  Bastion → App SSH **:22** allowed.
+
+- **ALB access logs to S3** (SSE, versioning, public-access-block, correct ELB delivery policy).
+
+- **CloudWatch alarms**: ALB 5xx and TargetGroup UnHealthyHostCount → SNS (optional email).
+
+> Modules: Coalfire (VPC, EC2/bastion), community (ALB, ASG). Everything is version-pinned.
+
+---
+
+## Diagram
+
+- `/diagram.puml` (PlantUML)  
+- `/Architecture Diagram.png` (exported)
+
+The diagram shows ALB in public subnets, ASG in private, a single Bastion in public, and NAT per AZ.
+
+---
+
+## Getting started
 
 
+# 0) Clone and enter the repo
+git clone https://github.com/<you>/tf-challenge.git
+cd tf-challenge
+
+# 1) Init
 terraform init
-terraform apply -var 'allowed_ssh_cidr=YOUR.IP/32'
+
+# 2) Plan/apply: set your source IP/CIDR for SSH
+export MYIP="$(curl -s https://checkip.amazonaws.com)/32"
+terraform plan  -var "allowed_ssh_cidr=${MYIP}"
+terraform apply -var "allowed_ssh_cidr=${MYIP}"
+
+# 3) When it finishes
+ALB="$(terraform output -raw alb_dns_name)"
+echo "http://$ALB"
 
 
-After apply, open `http://$(terraform output -raw alb_dns_name)` to see the Apache index page with instance info.
+## Variables
 
-## Variables you may set
-- `region` (default `us-west-2`)
-- `vpc_cidr` (default `10.1.0.0/16`)
-- `allowed_ssh_cidr` (**required**) – only this CIDR can SSH to bastion
-- `az_names` – optional override; otherwise first two AZs are used
-- `instance_type_app` (default `t2.micro`), `instance_type_bastion` (default `t2.micro`)
+allowed_ssh_cidr (required) — /32 allowed to Bastion
 
-## What this deploys
-- VPC + 6 /24 subnets (Mgmt/App/Backend across 2 AZs), IGW, NAT per AZ
-- Internet‑facing **ALB** in **Mgmt** subnets → forwards HTTP:80 to **ASG** targets in **App** subnets
-- **Bastion** in **Mgmt** public subnet; SSH limited to `allowed_ssh_cidr`; SSH to App instances allowed
-- **S3** bucket for ALB access logs (optional toggle `enable_alb_logs`)
+region (default us-west-2)
 
-# Assumptions & Decisions
+vpc_cidr (default 10.1.0.0/16)
 
-- **Subnet wording**: “3 subnets spread evenly across 2 AZs” is a little confusing and i interpreted it as **3 tiers across 2 AZs (6 subnets)** to preserve HA.
-- **Public ingress policy**: Only **Management tier** is internet‑accessible; **Application/Backend** are private.
-- **Egress**: NAT per AZ for simplicity; consider VPC endpoints later to reduce NAT cost.
-- **SSH**: Enabled to meet the requirementss; SSM agent is present via Amazon Linux AMI for a future SSH‑free posture.
-- **Modules**: Coalfire VPC/EC2/S3; community ALB/ASG (didnt see these in github).
+az_names (optional override; by default I take the first two AZs)
 
-# Improvement Plan (follow‑ups)
-1. Add AWS WAF to ALB; enable structured logging + CloudWatch alarms.
-2. Split **Public** vs **Management** tiers (move bastion to private+SSM, get rid of direct ssh).
-3. Add VPC endpoints (S3, SSM) and restrict NAT.
-4. Use Image Builder/Packer for immutable AMIs; ASG Instance Refresh.
-5. Evaluate `t4g.micro` if architecture allows or other instances better suited for this and cheaper cost.
+instance_type_app / instance_type_bastion (default t2.micro)
 
+enable_alb_logs (default true) — S3 bucket + policy for ALB access logs
+
+create_alarms (default true), alarm_email (optional SNS email subscription)
+
+
+## Outputs
+
+alb_dns_name – ALB endpoint
+
+app_asg_name – ASG name
+
+bastion_public_ip – Bastion EIP 
+
+
+## Evidence 
+check the files
+/terraform-plan-before-improvements.txt
+/terraform-plan-after-improvements.txt
+/terraform-apply-live-proof.txt
+
+
+## Design notes & assumptions
+
+The PDF says “3 subnets, spread evenly across two AZs.” I interpreted that as 3 tiers across 2 AZs (6 subnets) for actual even spread and basic AZ resilience.
+
+Exposure: only Mgmt subnets are public; App/Backend are private behind NAT.
+
+NAT per AZ: simplest HA for egress. In a tiny home based lab you could cut this to one NAT to save cost.
+
+HTTP only for the challenge scope (no TLS). TLS/WAF is a natural follow-up.
+
+AMI: Amazon Linux 2023. Size: t2.micro to keep cost low.
+
+Region: us-west-2. Two AZs.
+
+## Module choices
+
+Coalfire: VPC, EC2 (bastion)
+
+Community: ALB, ASG (well-known modules; clean inputs/outputs; widely used)
+I didn’t see public Coalfire ALB/ASG modules; these are version-pinned for reproducibility.
+
+## Runbook (operate / break-glass)
+
+# Deploy / destroy
+
+terraform apply  -var "allowed_ssh_cidr=${MYIP}"
+terraform destroy -var "allowed_ssh_cidr=${MYIP}"
+
+
+# Scale up/down
+
+# asg.tf
+min_size = 2
+desired_capacity = 2
+max_size = 6
+
+
+Change and re-apply.
+
+# Rotate Bastion CIDR
+
+terraform apply -var "allowed_ssh_cidr=$(curl -s https://checkip.amazonaws.com)/32"
+
+#ASG Instance Refresh
+
+Change AMI or user data → module will bump LT version
+
+Use Instance Refresh from console if you want to roll instances immediately
+
+# Outage triage (Apache down)
+
+Check ALB Target Group health → identify failing AZ/targets
+
+SSH to bastion → journalctl -u httpd on a target
+
+If the fleet looks wedged, trigger an Instance Refresh to replace nodes
+
+# ALB logs / S3 restore
+
+Bucket is versioned and public-blocked
+
+If the bucket is deleted: terraform apply re-creates bucket + policy
+
+If objects are removed: restore from prior versions or your central log archive
+
+## Improvement plan (prioritized)
+
+I implemented two that the PDF calls out explicitly:
+
+ALB access logging to S3 (SSE, versioning, public-block, ELB delivery policy)
+
+CloudWatch alarms + SNS (ALB 5xx, UnHealthyHostCount)
+
+# Next steps if this were prod:
+
+Add AWS WAF in front of ALB; push structured logs to CW Logs/S3 Lake
+
+Move Bastion off the public internet (private + SSM Session Manager only)
+
+Add VPC endpoints (S3, SSM) to trim NAT traffic and restrict egress
+
+Bake app into an AMI with Image Builder/Packer; use ASG Instance Refresh
+
+Right-size instance families (e.g., t4g.micro if arm64 is fine)

@@ -3,7 +3,7 @@ resource "aws_lb" "alb" {
   load_balancer_type = "application"
   internal           = false
 
-  
+
   subnets = values(module.vpc.public_subnets)
 
   security_groups = [aws_security_group.alb.id]
@@ -12,7 +12,7 @@ resource "aws_lb" "alb" {
   dynamic "access_logs" {
     for_each = var.enable_alb_logs ? [1] : []
     content {
-      bucket  = module.alb_logs[0].id
+      bucket  = aws_s3_bucket.alb_logs[0].id
       prefix  = "alb"
       enabled = true
     }

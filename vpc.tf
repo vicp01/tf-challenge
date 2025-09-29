@@ -5,9 +5,9 @@ module "vpc" {
   cidr     = var.vpc_cidr
   azs      = local.azs
 
-  subnets               = local.subnets
-  enable_nat_gateway    = true
-  single_nat_gateway    = false
+  subnets                = local.subnets
+  enable_nat_gateway     = true
+  single_nat_gateway     = false
   one_nat_gateway_per_az = true
 
   enable_vpn_gateway   = false
